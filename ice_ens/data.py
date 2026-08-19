@@ -4,6 +4,8 @@ Both sides are opened in place. Nothing is copied onto /glade/work.
 
   checkpoint : IFRAC from the POP monthly history, gx1v7 curvilinear 384x320
   truth      : ICEFRAC from Will's zarr, regular lat/lon 192x288, year 1980
+
+The checkpoint stays on gx1v7; the truth is what gets regridded onto it.
 """
 
 import glob
@@ -19,8 +21,8 @@ import xarray as xr
 #: Liyuan's case directories. Each case has a run/ full of POP history files.
 CASE_ROOT = "/glade/derecho/scratch/liyuanpu"
 
-#: Will's ground-truth run. Different grid, so the checkpoint gets regridded
-#: onto this one. Covers calendar year 1980 only.
+#: Will's ground-truth run. Different grid, so this is what gets regridded --
+#: onto the checkpoints' gx1v7. Covers calendar year 1980 only.
 TRUTH_ZARR = (
     "/glade/derecho/scratch/wchapman/b_credit_runs/"
     "b.e21.CREDIT_climate_branch_1980_1980_zmdata_ERA5scaled_zmdata_Qtot.zarr"
@@ -127,24 +129,42 @@ def load_checkpoint(case, years=None, var="IFRAC"):
     return out
 
 
-def load_truth(var="ICEFRAC"):
+def load_truth(var="ICEFRAC", extra=("LANDFRAC",)):
     """Monthly-mean ground-truth ice fraction on its native lat/lon grid.
 
     The store is 6-hourly, so it is averaged to monthly means to line up with
     the POP monthly stream. A plain mean is exact here: the samples are evenly
     spaced and the calendar is noleap.
+
+    ``LANDFRAC`` comes along by default: ``1 - LANDFRAC`` is the sea fraction
+    that divides CAM's land dilution back out when the reference is carried onto
+    gx1v7 -- see ``ice_ens.regrid.to_model_grid``. Pass ``extra=()`` to skip it.
+
+    Do *not* reach for ``OCNFRAC`` for that job. In CAM,
+    ``LANDFRAC + OCNFRAC + ICEFRAC = 1``: ``OCNFRAC`` is the *open* ocean and
+    excludes the ice itself, so under the pack it is ~0 and dividing by it
+    deletes exactly the cells the comparison is about.
     """
     ds = xr.open_zarr(TRUTH_ZARR, chunks={})
-    grouped = ds[var].groupby(["time.year", "time.month"]).mean("time")
-    grouped = grouped.stack(ym=("year", "month")).transpose("ym", ...)
-    grouped = grouped.dropna("ym", how="all")
 
-    stamps = [(int(y), int(m)) for y, m in zip(grouped.year.values, grouped.month.values)]
-    values = grouped.reset_index("ym").rename(ym="time").drop_vars(
-        ["year", "month"], errors="ignore"
-    )
+    fields = {}
+    stamps = None
+    for name in (var, *extra):
+        if name not in ds:
+            continue
+        grouped = ds[name].groupby(["time.year", "time.month"]).mean("time")
+        grouped = grouped.stack(ym=("year", "month")).transpose("ym", ...)
+        grouped = grouped.dropna("ym", how="all")
+        if stamps is None:
+            stamps = [
+                (int(y), int(m))
+                for y, m in zip(grouped.year.values, grouped.month.values)
+            ]
+        fields[name] = grouped.reset_index("ym").rename(ym="time").drop_vars(
+            ["year", "month"], errors="ignore"
+        )
 
-    out = xr.Dataset({var: values})
+    out = xr.Dataset(fields)
     out = out.assign_coords(_month_coords(stamps))
     out = out.assign_coords(latitude=ds.latitude.values, longitude=ds.longitude.values)
     out.attrs["label"] = "ground truth"

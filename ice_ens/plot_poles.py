@@ -3,7 +3,15 @@
 The four plot_arctic_* / plot_antarctic_* functions draw one dataset. The two
 *_compare functions at the bottom put a checkpoint next to the ground truth,
 which is the point of the exercise -- both fields have to be on the same grid
-first, so run the checkpoint through ice_ens.regrid before calling them.
+first, so run the *reference* through ice_ens.regrid.to_model_grid before
+calling them. The checkpoint itself is drawn on its native gx1v7 grid and is
+never interpolated.
+
+Two grid layouts are therefore drawn. A regular lat/lon field is contoured, as
+before. A curvilinear gx1v7 field is drawn with pcolormesh instead: contouring
+a tripole grid smears the seam, and pcolormesh shows the cells as they actually
+are, which is the honest picture when the point is to judge the model's own
+field.
 """
 
 import cartopy.crs as ccrs
@@ -12,8 +20,9 @@ import cartopy.util as cutil
 import matplotlib.pyplot as plt
 import matplotlib.path as mpath
 import numpy as np
+from matplotlib.colors import BoundaryNorm
 
-from . import data
+from . import data, grids
 
 
 MONTH_NAMES = [
@@ -68,8 +77,36 @@ def _setup_polar_ax(ax, hemisphere, edge=60, resolution=COASTLINE):
     return gl
 
 
-def _contour(ax, lons, lats, values, levels, colormap):
-    """Filled contours with the 0/360 seam closed so no gap shows there."""
+def _coords(ds):
+    """Plotting coordinates for a dataset, whichever grid it is on.
+
+    Returns ``(lons, lats, curvilinear)``. For gx1v7 the longitudes come from
+    :func:`ice_ens.grids.pop_grid`, which has already snapped every row onto one
+    branch -- raw ``TLONG`` jumps by 360 mid-row and pcolormesh would draw one
+    cell straight across the globe at the seam.
+
+    Built once per figure and passed down; rebuilding it inside a 12-panel loop
+    is pure waste.
+    """
+    if "TLAT" in ds and "ULAT" in ds:
+        grid = grids.pop_grid(ds)
+        return grid["lon"].values, grid["lat"].values, True
+    return ds["longitude"].values, ds["latitude"].values, False
+
+
+def _draw(ax, lons, lats, values, levels, colormap, curvilinear=False):
+    """One field onto one polar panel, by whichever route its grid needs."""
+    if curvilinear:
+        # shading="nearest" treats the given lat/lon as cell centres, so the
+        # tripole seam closes on its own and nothing has to be made cyclic.
+        return ax.pcolormesh(
+            lons, lats, values,
+            norm=BoundaryNorm(levels, ncolors=256, extend="both"),
+            cmap=colormap, transform=ccrs.PlateCarree(),
+            shading="nearest", zorder=2,
+        )
+
+    # Filled contours with the 0/360 seam closed so no gap shows there.
     cyclic, lons_cyclic = cutil.add_cyclic_point(values, coord=lons)
     return ax.contourf(
         lons_cyclic, lats, cyclic,
@@ -127,8 +164,7 @@ def plot_antarctic_mean(ds, year=1, var="TREFHT", colormap="YlOrRd",
 
 
 def _grid(ds, hemisphere, year, var, colormap, levels, edge, title):
-    lons = ds["longitude"].values
-    lats = ds["latitude"].values
+    lons, lats, curvilinear = _coords(ds)
 
     # pull each month's mean first so all 12 panels share one color scale
     monthly = {}
@@ -154,7 +190,7 @@ def _grid(ds, hemisphere, year, var, colormap, levels, edge, title):
             ax.text(0.5, 0.5, "No data", transform=ax.transAxes,
                     ha="center", va="center")
             continue
-        mesh = _contour(ax, lons, lats, monthly[month], levels, colormap)
+        mesh = _draw(ax, lons, lats, monthly[month], levels, colormap, curvilinear)
 
     if mesh is not None:
         fig.colorbar(mesh, ax=axes, orientation="horizontal",
@@ -165,8 +201,7 @@ def _grid(ds, hemisphere, year, var, colormap, levels, edge, title):
 
 
 def _single(ds, hemisphere, year, var, colormap, levels, edge, title):
-    lons = ds["longitude"].values
-    lats = ds["latitude"].values
+    lons, lats, curvilinear = _coords(ds)
 
     # average every timestep in the requested year
     values = ds[var].sel(time=ds["time"].dt.year == year).mean(dim="time").values
@@ -177,7 +212,7 @@ def _single(ds, hemisphere, year, var, colormap, levels, edge, title):
         figsize=(6, 6), subplot_kw={"projection": _projection(hemisphere)}
     )
     _setup_polar_ax(ax, hemisphere, edge)
-    mesh = _contour(ax, lons, lats, values, levels, colormap)
+    mesh = _draw(ax, lons, lats, values, levels, colormap, curvilinear)
     ax.set_title(title or f"Mean {var} — year {year}")
     fig.colorbar(mesh, ax=ax, orientation="horizontal", pad=0.05, shrink=0.9)
     return fig, ax
@@ -186,14 +221,14 @@ def _single(ds, hemisphere, year, var, colormap, levels, edge, title):
 # ------------------------------------------------------- checkpoint vs truth ----
 
 def plot_month_compare(model, truth, year, month, hemisphere="north",
-                       edge=60, var="ICEFRAC"):
+                       edge=60, var="IFRAC"):
     """One month, three panels: checkpoint, ground truth, and their difference.
 
-    Both datasets must already be on the same grid -- put the checkpoint through
-    ``ice_ens.regrid.to_truth_grid`` first.
+    Both datasets must already be on the same grid -- put the *reference*
+    through ``ice_ens.regrid.to_model_grid`` first. The checkpoint stays native,
+    so the coordinates are taken from it.
     """
-    lons = truth["longitude"].values
-    lats = truth["latitude"].values
+    lons, lats, curvilinear = _coords(model)
 
     model_values = data.pick_month(model, year, month, var)
     truth_values = data.pick_month(truth, year, month, var)
@@ -210,7 +245,7 @@ def plot_month_compare(model, truth, year, month, hemisphere="north",
     meshes = []
     for ax, (values, levels, cmap, label) in zip(axes, panels):
         _setup_polar_ax(ax, hemisphere, edge)
-        meshes.append(_contour(ax, lons, lats, values, levels, cmap))
+        meshes.append(_draw(ax, lons, lats, values, levels, cmap, curvilinear))
         ax.set_title(label)
 
     fig.colorbar(meshes[1], ax=axes[:2], orientation="horizontal",
@@ -224,14 +259,13 @@ def plot_month_compare(model, truth, year, month, hemisphere="north",
 
 
 def plot_year_compare(model, truth, year, hemisphere="north", edge=60,
-                      var="ICEFRAC", show_diff=False):
+                      var="IFRAC", show_diff=False):
     """A whole year at a glance: the checkpoint's 12 months above the truth's.
 
     Set ``show_diff`` for a third row of differences. Both datasets must already
-    be on the same grid.
+    be on the same grid -- the reference having been carried onto gx1v7.
     """
-    lons = truth["longitude"].values
-    lats = truth["latitude"].values
+    lons, lats, curvilinear = _coords(model)
 
     rows = [
         (model, ICE_LEVELS, ICE_CMAP, model.attrs.get("label", "checkpoint")),
@@ -261,7 +295,7 @@ def plot_year_compare(model, truth, year, hemisphere="north", edge=60,
             else:
                 values = data.pick_month(source, year, month, var)
 
-            mesh = _contour(ax, lons, lats, values, levels, cmap)
+            mesh = _draw(ax, lons, lats, values, levels, cmap, curvilinear)
             if source is None:
                 diff_mesh = mesh
             else:
