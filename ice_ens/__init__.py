@@ -21,6 +21,19 @@ Both inputs are read in place on scratch. Output goes to
 ``data.OUTPUT_DIR``, one subdirectory per checkpoint.
 """
 
-from . import data, grids, metrics, plot_poles, regrid
+from . import data, ensemble, grids, metrics, plot_poles, regrid
+from .ensemble import (
+    bias_ensemble,
+    climatology,
+    ice_area,
+    plot_area_error,
+    plot_bias_grid,
+    plot_month_grid,
+    regrid_to_gx1v7,
+)
 
-__all__ = ["data", "grids", "metrics", "plot_poles", "regrid"]
+__all__ = [
+    "data", "ensemble", "grids", "metrics", "plot_poles", "regrid",
+    "climatology", "regrid_to_gx1v7", "ice_area", "bias_ensemble",
+    "plot_bias_grid", "plot_area_error", "plot_month_grid",
+]

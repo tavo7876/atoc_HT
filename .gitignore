@@ -1,0 +1,82 @@
+# ==============================================================================
+# 1. NCAR / HPC CLUSTER SPECIFIC
+# ==============================================================================
+# Prevent accidental commits of massive scientific data formats
+*.nc
+*.nc4
+*.grib
+*.grib2
+*.grb
+*.hdf
+*.h5
+*.hdf5
+*.tiff
+*.tif
+
+# Ignore cluster crash artifacts and core dumps
+core.*
+*.out
+*.err
+
+# ==============================================================================
+# 2. JUPYTER LAB SPECIFIC
+# ==============================================================================
+# Hidden directory where Jupyter stores cell history auto-backups
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# Jupyter Lab workspace and server states
+.virtual_documents/
+.jupyter/
+.local/share/jupyter/
+
+# Large generated HTML/PDF notebook exports (keep the .ipynb files, ignore the bloat)
+*.html
+*.pdf
+
+# ==============================================================================
+# 3. PYTHON SPECIFIC
+# ==============================================================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Custom or cloned Conda environments stored locally in your project folder
+.conda/
+env/
+venv/
+.venv/
+
+# Python distribution and packaging files
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+MANIFEST
+
+# ==============================================================================
+# 4. SECURITY & SYSTEM ENVIRONMENT
+# ==============================================================================
+# Keep your user tokens and project keys out of GitHub
+.env
+.env.local
+*.pem
+*.key
+
+# Operating system artifacts
+.DS_Store
+Thumbs.db

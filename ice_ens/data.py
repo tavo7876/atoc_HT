@@ -3,9 +3,12 @@
 Both sides are opened in place. Nothing is copied onto /glade/work.
 
   checkpoint : IFRAC from the POP monthly history, gx1v7 curvilinear 384x320
-  truth      : ICEFRAC from Will's zarr, regular lat/lon 192x288, year 1980
+  truth      : ICEFRAC from Will's zarrs, regular lat/lon 192x288, one store
+               per calendar year
 
-The checkpoint stays on gx1v7; the truth is what gets regridded onto it.
+The checkpoint stays on gx1v7; the truth is what gets regridded onto it. Both
+loaders take the same ``years`` shorthand, so both sides are asked for the same
+window in the same words.
 """
 
 import glob
@@ -21,11 +24,13 @@ import xarray as xr
 #: Liyuan's case directories. Each case has a run/ full of POP history files.
 CASE_ROOT = "/glade/derecho/scratch/liyuanpu"
 
-#: Will's ground-truth run. Different grid, so this is what gets regridded --
-#: onto the checkpoints' gx1v7. Covers calendar year 1980 only.
-TRUTH_ZARR = (
-    "/glade/derecho/scratch/wchapman/b_credit_runs/"
-    "b.e21.CREDIT_climate_branch_1980_1980_zmdata_ERA5scaled_zmdata_Qtot.zarr"
+#: Will's ground-truth runs. Different grid, so these are what get regridded --
+#: onto the checkpoints' gx1v7. One store per calendar year, 1980 through 2014.
+#: The 1980 in the name is the branch year and never changes; the second year is
+#: the one the store actually covers.
+TRUTH_ROOT = "/glade/derecho/scratch/wchapman/b_credit_runs"
+TRUTH_TEMPLATE = (
+    "b.e21.CREDIT_climate_branch_1980_{year}_zmdata_ERA5scaled_zmdata_Qtot.zarr"
 )
 
 # --------------------------------------------------------------- outputs ----
@@ -129,47 +134,93 @@ def load_checkpoint(case, years=None, var="IFRAC"):
     return out
 
 
-def load_truth(var="ICEFRAC", extra=("LANDFRAC",)):
+def truth_zarr(year):
+    """Path to the ground-truth store covering ``year``."""
+    return os.path.join(TRUTH_ROOT, TRUTH_TEMPLATE.format(year=year))
+
+
+def truth_years():
+    """Every year Will has a store for, sorted."""
+    pattern = os.path.join(TRUTH_ROOT, TRUTH_TEMPLATE.format(year="[0-9][0-9][0-9][0-9]"))
+    stem = TRUTH_TEMPLATE.split("{year}")
+    years = []
+    for path in glob.glob(pattern):
+        name = os.path.basename(path)
+        years.append(int(name[len(stem[0]):-len(stem[1])]))
+    return sorted(years)
+
+
+def load_truth(years=1980, var="ICEFRAC", extra=("LANDFRAC",)):
     """Monthly-mean ground-truth ice fraction on its native lat/lon grid.
 
-    The store is 6-hourly, so it is averaged to monthly means to line up with
+    ``years`` is a single year, a list of years, or two values read as an
+    inclusive range -- the same shorthand :func:`load_checkpoint` takes, so the
+    two sides can be asked for the same window in the same words. One store per
+    year is opened and the monthly means are concatenated.
+
+    Each store is 6-hourly, so it is averaged to monthly means to line up with
     the POP monthly stream. A plain mean is exact here: the samples are evenly
     spaced and the calendar is noleap.
 
     ``LANDFRAC`` comes along by default: ``1 - LANDFRAC`` is the sea fraction
     that divides CAM's land dilution back out when the reference is carried onto
-    gx1v7 -- see ``ice_ens.regrid.to_model_grid``. Pass ``extra=()`` to skip it.
+    gx1v7 -- see ``ice_ens.regrid.to_model_grid``. It is fixed in time, so it is
+    read once from the first year rather than once per year. Pass ``extra=()``
+    to skip it.
 
     Do *not* reach for ``OCNFRAC`` for that job. In CAM,
     ``LANDFRAC + OCNFRAC + ICEFRAC = 1``: ``OCNFRAC`` is the *open* ocean and
     excludes the ice itself, so under the pack it is ~0 and dividing by it
     deletes exactly the cells the comparison is about.
     """
-    ds = xr.open_zarr(TRUTH_ZARR, chunks={})
-
-    fields = {}
-    stamps = None
-    for name in (var, *extra):
-        if name not in ds:
-            continue
-        grouped = ds[name].groupby(["time.year", "time.month"]).mean("time")
-        grouped = grouped.stack(ym=("year", "month")).transpose("ym", ...)
-        grouped = grouped.dropna("ym", how="all")
-        if stamps is None:
-            stamps = [
-                (int(y), int(m))
-                for y, m in zip(grouped.year.values, grouped.month.values)
-            ]
-        fields[name] = grouped.reset_index("ym").rename(ym="time").drop_vars(
-            ["year", "month"], errors="ignore"
+    wanted = sorted(_expand_years([years] if isinstance(years, int) else years))
+    available = set(truth_years())
+    missing = [y for y in wanted if y not in available]
+    if missing:
+        raise FileNotFoundError(
+            f"no ground-truth store for {missing}; have "
+            f"{min(available)}-{max(available)}"
         )
 
-    out = xr.Dataset(fields)
+    pieces, stamps, statics, coords = [], [], {}, None
+    for year in wanted:
+        ds = xr.open_zarr(truth_zarr(year), chunks={})
+        values, months = _monthly_mean(ds[var])
+        pieces.append(values)
+        stamps.extend(months)
+
+        if coords is None:
+            coords = (ds.latitude.values, ds.longitude.values)
+            # Fixed in time and identical in every store, so read them once.
+            for name in extra:
+                if name in ds:
+                    field = ds[name]
+                    statics[name] = (
+                        field.isel(time=0, drop=True) if "time" in field.dims else field
+                    ).load()
+
+    out = xr.Dataset({var: xr.concat(pieces, dim="time")} | statics)
     out = out.assign_coords(_month_coords(stamps))
-    out = out.assign_coords(latitude=ds.latitude.values, longitude=ds.longitude.values)
+    out = out.assign_coords(latitude=coords[0], longitude=coords[1])
     out.attrs["label"] = "ground truth"
     out.attrs["grid"] = "regular lat/lon 192x288"
+    out.attrs["years"] = f"{wanted[0]}-{wanted[-1]}" if len(wanted) > 1 else str(wanted[0])
     return out
+
+
+def _monthly_mean(da):
+    """Collapse a 6-hourly field to monthly means, and the (year, month) it covers."""
+    grouped = da.groupby(["time.year", "time.month"]).mean("time")
+    grouped = grouped.stack(ym=("year", "month")).transpose("ym", ...)
+    grouped = grouped.dropna("ym", how="all")
+
+    stamps = [
+        (int(y), int(m)) for y, m in zip(grouped.year.values, grouped.month.values)
+    ]
+    values = grouped.reset_index("ym").rename(ym="time").drop_vars(
+        ["year", "month"], errors="ignore"
+    )
+    return values.load(), stamps
 
 
 def _month_of(path):

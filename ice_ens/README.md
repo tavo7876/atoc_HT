@@ -3,7 +3,7 @@
 Compares sea ice in a CAMulator + POP2 + CICE5 checkpoint against a ground-truth run.
 
 Three steps: **load** the two datasets, **regrid the reference** onto the checkpoint's
-native gx1v7 grid, **look** at them side by side. Five modules, one notebook.
+native gx1v7 grid, **look** at them side by side. Six modules, two notebooks.
 
 ## Which way the regridding goes
 
@@ -21,8 +21,8 @@ The **checkpoint stays native**. The **reference is what moves.**
 |---|---|
 | checkpoint | `/glade/derecho/scratch/liyuanpu/g.e21.CAMULATOR_POP_<label>/run/*.pop.h.YYYY-MM.nc` |
 | | `IFRAC` — "Ice Fraction from Coupler", gx1v7 curvilinear 384×320, monthly |
-| ground truth | `.../wchapman/b_credit_runs/b.e21.CREDIT_climate_branch_1980_1980_...zarr` |
-| | `ICEFRAC` + `LANDFRAC`, regular lat/lon 192×288, 6-hourly, calendar year 1980 |
+| ground truth | `.../wchapman/b_credit_runs/b.e21.CREDIT_climate_branch_1980_<year>_...zarr` |
+| | `ICEFRAC` + `LANDFRAC`, regular lat/lon 192×288, 6-hourly, **one store per year, 1980–2014** |
 
 Both are opened **in place**. Nothing is copied onto `/glade/work`.
 
@@ -35,17 +35,19 @@ Both are opened **in place**. Nothing is copied onto `/glade/work`.
 | `regrid.py` | builds the regridder, carries the reference across, checks conservation |
 | `metrics.py` | ice area and extent on the native grid, weighted by `TAREA` |
 | `plot_poles.py` | polar maps — single-dataset, and checkpoint-vs-reference |
+| `ensemble.py` | the multi-year climatology: mean, regrid, bias, area error, the figures, and the 12-month grid |
 
-`../ice_comparison.ipynb` is the driver. Start there.
+`../ice_climatology.ipynb` is the driver for the multi-year bias; `../ice_comparison.ipynb`
+is the driver for one year, month by month.
 
 ## Usage
 
 ```python
 from ice_ens import data, regrid, metrics, plot_poles
 
-model = data.load_checkpoint("ck33", years=[1980])
-truth = data.load_truth()
-ref   = regrid.to_model_grid(truth, model)          # reference -> gx1v7
+model = data.load_checkpoint("ck33", years=[1980, 1983])   # inclusive range
+truth = data.load_truth(years=[1980, 1983])                # same shorthand
+ref   = regrid.to_model_grid(truth, model)                 # reference -> gx1v7
 
 plot_poles.plot_month_compare(model, ref, 1980, 9, "north")
 metrics.compare(model, ref, "north").to_dataframe()
@@ -53,6 +55,21 @@ metrics.compare(model, ref, "north").to_dataframe()
 
 `ref` is reused unchanged across every checkpoint — they all share gx1v7, so the
 regrid happens once.
+
+## Years
+
+Will has one store per calendar year, **1980–2014**; the checkpoints run **1980–1990**,
+so that overlap is the usable window. `data.truth_years()` lists what exists,
+`data.truth_zarr(year)` gives one path.
+
+`load_checkpoint` and `load_truth` take the same `years` shorthand — a bare int, a
+list of years, or two values read as an inclusive range — so both sides are asked for
+the same window in the same words. Give them the same one: if they differ, xarray
+arithmetic in `metrics` falls back to the overlap without saying so.
+
+`LANDFRAC` is fixed in time and identical in every store, so it is read once however
+many years are requested. The weight files depend only on the two grids, so the same
+pair serves every year and every checkpoint.
 
 ## Which method
 
@@ -95,9 +112,6 @@ structure in a difference is the model's own; there is no reference detail below
 **There are no `cpl.hi` files in these cases.** The CESM2/MCT coupler history stream
 was not enabled. `IFRAC` in the POP monthly stream is the same coupler field, received
 by the ocean, and is what `Check_dataset.ipynb` was already reading.
-
-**The ground truth covers 1980 only**, so that is the comparison window however far a
-checkpoint runs.
 
 **POP stamps a monthly file at the end of its averaging interval** — January's file
 carries a timestamp of 1 February. Trusting it shifts the whole seasonal cycle by a
