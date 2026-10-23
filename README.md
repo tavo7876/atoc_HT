@@ -20,8 +20,8 @@ Run it on the **NPL kernel** — `/glade/u/apps/opt/conda/envs/npl` — which is
 
 Everything is a plain argument. No config file, no globals, no paths baked in.
 
-Drawing reuses `ice_ens/plot_poles.py` (polar axis, pcolormesh-vs-contour, gx1v7
-coordinate cleanup) and `ice_ens/grids.py` (gx1v7 cell corners). Neither is duplicated.
+Drawing reuses `ice_ens/plot_poles.py` (polar axis, pcolormesh, gx1v7 coordinate
+cleanup) and `ice_ens/grids.py` (gx1v7 cell corners). Neither is duplicated.
 
 ## Data flow
 
@@ -38,7 +38,7 @@ The reference is climatologied once and regridded once; every checkpoint reuses 
 from ice_ens import data, bias_ensemble, plot_bias_grid, plot_area_error
 
 CASE    = "ck33"
-FIG_DIR = data.out_dir(CASE, "ensemble")        # -> output/ck33/ensemble/
+FIG_DIR = data.out_dir(CASE, "ice_plot/JJA/Arctic")   # -> output/ck33/ice_plot/JJA/Arctic/
 
 biases, areas = bias_ensemble(
     {CASE: f"/glade/derecho/scratch/liyuanpu/g.e21.CAMULATOR_POP_{CASE}/run"},
@@ -69,8 +69,65 @@ fig, biases, areas = plot_month_grid(
 
 About two minutes for a year. One checkpoint per call — two would be 24 panels.
 
-Output goes to `output/<case>/ensemble/`, alongside that case's `figures/` from the
-single-year comparison — `data.out_dir(case, kind)` builds and creates the directory.
+## Output layout
+
+One tree per checkpoint, the same shape for all of them. `data.out_dir(case, kind)`
+builds and creates any of these on demand — `kind` is everything below `<case>/`.
+
+```
+output/<case>/
+├── figures/                     single-year comparison (ice_comparison.ipynb)
+├── ice_plot/                    climatological bias    (ice_climatology.ipynb)
+│   ├── 12-Month/
+│   │   ├── Arctic/
+│   │   └── Antarctic/
+│   └── JJA/
+│       ├── Arctic/
+│       └── Antarctic/
+└── fluxes/                      fluxes                 (plot_fluxes.ipynb)
+    ├── FLDS_J/   FSDS_J/   FSUS/   SHFLX/   LHFLX/
+    └── FLUS/
+        ├── FLUS_vs_FLUS_60-90N_1980-1984_clim.png   time series at the root
+        └── spatial/                                 maps below it
+            ├── 12-Month/{Arctic,Antarctic,Global}/
+            └── JJA/{Arctic,Antarctic,Global}/
+```
+
+Maps mirror the ice layout — season above hemisphere — nested under the variable.
+The season directory is named from whatever `months=` was, so `JJA/`, `DJF/`, `Jul/`
+and `Annual/` all coexist.
+
+The six flux directories are the six fluxes under comparison (`fluxes.FLUX_VARS`).
+`plot_series` creates a new one on demand, so plotting a seventh variable makes its
+directory without any setup.
+
+Figures only — no data lands here. The one bulky thing this code writes is the flux
+cache, and it goes to scratch:
+
+```
+/glade/derecho/scratch/tvoeller/honors_thesis/flux_cache/<case>/
+    camulator_fluxes_monthly_<year>.nc
+    cesm_fluxes_monthly_<year>.nc
+```
+
+One file per year per model, monthly means on the native grid, built once by
+`build_flux_cache(case, years)` — see `ice_ens/README.md`. Scratch is purged every 90
+days; the cache is derived data, so rebuilding it is one call and nothing depends on it
+surviving.
+
+```python
+FIG_DIR = data.out_dir(CASE, "ice_plot/JJA/Arctic")
+FIG_DIR = data.out_dir(CASE, "ice_plot/12-Month/Antarctic")
+FIG_DIR = data.out_dir(CASE, "fluxes/FSDS_J")
+FIG_DIR = fluxes.map_dir(CASE, "FLUS", "JJA", "north")   # .../FLUS/spatial/JJA/Arctic
+```
+
+`plot_series` picks its own `fluxes/<variable>/` when given `case=` and no `fig_dir=`.
+The ice plotters take `fig_dir=` explicitly, so the hemisphere directory is chosen at
+the call site, not inferred.
+
+ck33 also has `ice_plot/Aug-08/`, `July_06/` and `March-03/` — single-month windows,
+siblings of `12-Month` and `JJA` because they are neither.
 
 `months=[6,7,8]` gives a JJA *mean* — one field, one panel. For the three months
 **side by side** instead, call `bias_ensemble` once per month and key the dict by month
