@@ -21,7 +21,7 @@ Both inputs are read in place on scratch. Output goes to
 ``data.OUTPUT_DIR``, one subdirectory per checkpoint.
 """
 
-from . import data, ensemble, grids, metrics, plot_poles, regrid
+from . import data, ensemble, grids, metrics, plot_poles, regrid, fluxes, stress, icefrac
 from .ensemble import (
     bias_ensemble,
     climatology,
@@ -31,9 +31,37 @@ from .ensemble import (
     plot_month_grid,
     regrid_to_gx1v7,
 )
+from .fluxes import (
+    FLUX_VARS,
+    build_flux_cache,
+    cache_path,
+    flux_balance,
+    flux_budget,
+    flux_daily,
+    flux_day,
+    flux_map,
+    flux_map_months,
+    flux_series,
+    load_flux_cache,
+    load_camulator,
+    load_cesm,
+    monthly_mean,
+    map_dir,
+    plot_balance,
+    plot_map_grid,
+    plot_maps,
+    plot_series,
+    regional_mean,
+)
 
 __all__ = [
-    "data", "ensemble", "grids", "metrics", "plot_poles", "regrid",
+    "data", "ensemble", "fluxes", "grids", "metrics", "plot_poles", "regrid", "stress", "icefrac",
     "climatology", "regrid_to_gx1v7", "ice_area", "bias_ensemble",
     "plot_bias_grid", "plot_area_error", "plot_month_grid",
+    "build_flux_cache", "load_flux_cache", "cache_path", "FLUX_VARS",
+    "flux_series", "plot_series", "flux_map", "plot_maps",
+    "flux_map_months", "plot_map_grid", "map_dir", "flux_day", "flux_daily",
+    "flux_balance", "flux_budget", "plot_balance",
+    "load_camulator", "load_cesm",
+    "regional_mean", "monthly_mean",
 ]

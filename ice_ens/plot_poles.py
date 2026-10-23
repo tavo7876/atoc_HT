@@ -7,16 +7,15 @@ first, so run the *reference* through ice_ens.regrid.to_model_grid before
 calling them. The checkpoint itself is drawn on its native gx1v7 grid and is
 never interpolated.
 
-Two grid layouts are therefore drawn. A regular lat/lon field is contoured, as
-before. A curvilinear gx1v7 field is drawn with pcolormesh instead: contouring
-a tripole grid smears the seam, and pcolormesh shows the cells as they actually
-are, which is the honest picture when the point is to judge the model's own
-field.
+Two grid layouts are drawn, and both go through pcolormesh: one quad per grid
+cell, never an interpolated contour. Contouring a tripole grid smears the seam,
+and on a regular grid it drops data outright wherever a field jumps hard from
+cell to cell. pcolormesh shows the cells as they actually are, which is the
+honest picture when the point is to judge the model's own field.
 """
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-import cartopy.util as cutil
 import matplotlib.pyplot as plt
 import matplotlib.path as mpath
 import numpy as np
@@ -55,8 +54,8 @@ def _setup_polar_ax(ax, hemisphere, edge=60, resolution=COASTLINE):
     """Land, coastlines, circular clip and gridlines for one polar panel."""
     extent = [-180, 180, edge, 90] if hemisphere == "north" else [-180, 180, -90, -edge]
     ax.set_extent(extent, ccrs.PlateCarree())
-    # No OCEAN feature: the filled contours cover the whole domain, so an ocean
-    # polygon underneath is never visible and costs several seconds per figure.
+    # No OCEAN feature: the mesh covers the whole domain, so an ocean polygon
+    # underneath is never visible and costs several seconds per figure.
     ax.add_feature(cfeature.LAND, facecolor="lightgray", zorder=3)
     ax.coastlines(resolution=resolution, zorder=4)
 
@@ -95,23 +94,28 @@ def _coords(ds):
 
 
 def _draw(ax, lons, lats, values, levels, colormap, curvilinear=False):
-    """One field onto one polar panel, by whichever route its grid needs."""
-    if curvilinear:
-        # shading="nearest" treats the given lat/lon as cell centres, so the
-        # tripole seam closes on its own and nothing has to be made cyclic.
-        return ax.pcolormesh(
-            lons, lats, values,
-            norm=BoundaryNorm(levels, ncolors=256, extend="both"),
-            cmap=colormap, transform=ccrs.PlateCarree(),
-            shading="nearest", zorder=2,
-        )
+    """One field onto one polar panel. One cell drawn per cell, always.
 
-    # Filled contours with the 0/360 seam closed so no gap shows there.
-    cyclic, lons_cyclic = cutil.add_cyclic_point(values, coord=lons)
-    return ax.contourf(
-        lons_cyclic, lats, cyclic,
-        levels=levels, transform=ccrs.PlateCarree(),
-        cmap=colormap, extend="both", zorder=2,
+    ``shading="nearest"`` treats the given lat/lon as cell centres, so the
+    tripole seam on gx1v7 and the 0/360 seam on a regular grid both close on
+    their own and nothing has to be made cyclic.
+
+    The regular-grid branch used to be ``contourf``, which was quietly dropping
+    data: where a field jumps hard from cell to cell -- a surface flux across
+    the Arctic ice edge is the worst case -- the contour polygons come out
+    degenerate and the panel is left with white holes along exactly the boundary
+    the figure is there to show. ``pcolormesh`` cannot do that, because every
+    cell is its own quad. The cost is a blockier map, which at 192x288 is honest
+    about the resolution rather than interpolating past it.
+
+    ``curvilinear`` is now only a record of which grid the caller is on; both
+    grids take the same route.
+    """
+    return ax.pcolormesh(
+        lons, lats, values,
+        norm=BoundaryNorm(levels, ncolors=256, extend="both"),
+        cmap=colormap, transform=ccrs.PlateCarree(),
+        shading="nearest", zorder=2,
     )
 
 
