@@ -1,0 +1,1190 @@
+╭─── Claude Code v2.1.236 ─────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting        │
+│             Welcome back Tate Voeller!             │ started                 │
+│                                                    │ Run /init to create a … │
+│                       ▐▛███▛█                      │ ─────────────────────── │
+│                      ▝▜██████▀                     │ What's new              │
+│                        ▝▝ ▝▝                       │ Bug fixes and reliabil… │
+│   Opus 5 · Claude Pro · tatevoeller@gmail.com's    │ Bug fixes and reliabil… │
+│   Organization                                     │ Cost estimates (`/cost… │
+│      /glade/work/tvoeller/honors_thesis/code       │ /release-notes for more │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+❯ /resume                                                                       
+  ⎿  This conversation is from a different directory.
+
+     To resume, run:
+       cd /glade/work/tvoeller/honors_thesis && claude --resume
+     0ace314c-148f-4b4f-9ee5-cee71f8f98cf
+
+     (Command copied to clipboard)
+
+❯ Context: I'm evaluating sea ice in a coupled CAMulator + POP2 + CICE5 run on  
+  Derecho, for my honors thesis. I compare coupler ice fraction (variable       
+  IFRAC,                                                                        
+  from cpl.hi files) across several CAMulator checkpoint cases against a        
+  "ground                                                                       
+  truth" CESM reference. My advisor wants a CLIMATOLOGICAL comparison: the      
+  multi-year                                                                    
+  mean bias of IFRAC per checkpoint, starting with a 5-year window, later a     
+  20-year                                                                       
+  window. All checkpoints have biases, so I want to see them ALL together.      
+                                                                                
+  Work in /glade/work/tvoeller/honors_thesis/code/ice_ens. Reuse what's there;  
+  read all inputs IN PLACE; never copy netCDF/zarr files.                       
+                                                                                
+  === PRIORITY: keep this SIMPLE and easy for ME to modify ===                  
+                                                                                
+  The current code has too many tiny single-task functions and I can't easily   
+  change                                                                        
+  it. For this task, write a SMALL number of functions — about five or six —    
+  each                                                                          
+  handling one full STAGE of the work, with the logic written inline and        
+  readable.                                                                     
+  DO NOT create little helper functions underneath them. DO NOT split loading,  
+  selecting, and averaging into separate functions — that all goes inside one   
+  climatology function.                                                         
+                                                                                
+  Everything is a plain function argument — no config file, no global paths, no 
+  config object. A reader should see every input as an explicit argument.       
+                                                                                
+  If you previously split the regridding or area/metrics logic into many small  
+  functions, CONSOLIDATE that into the functions below rather than adding more  
+  layers.                                                                       
+  Do NOT rewrite my existing polar-plotting module — REUSE its drawing helpers  
+  (the ones that set up the polar axis, pick pcolormesh-vs-contour, and clean   
+  the                                                                           
+  gx1v7 coordinates). Import and call them; don't duplicate them.               
+                                                                                
+  === The functions (this is the whole public surface) ===                      
+                                                                                
+  1. climatology(path, months, years, var="IFRAC")                              
+       Load the data at `path` (detect .zarr -> xr.open_zarr, else netCDF glob  
+  ->                                                                            
+       open_mfdataset), select `var`, keep timesteps whose month is in `months` 
+  AND                                                                           
+       year is in the `years` (start, end) window, average over time. Return    
+  ONE 2D                                                                        
+       field. months=[8] gives August; months=[6,7,8] gives a JJA mean. This is 
+  the                                                                           
+       ONE place month/year selection happens, so it's the one function I edit  
+  to                                                                            
+       change what gets averaged.                                               
+                                                                                
+  2. regrid_to_gx1v7(ref_field, target_field, weights_path=None)                
+       Conservative (area-preserving) regrid of the reference field onto the    
+       checkpoint's native gx1v7 grid. Build the regridder once; if             
+  weights_path is                                                               
+       given, save the weight file there and reuse it if it already exists.     
+       NEVER regrid the checkpoints.                                            
+                                                                                
+  3. ice_area(field, cell_area, lat, hemisphere)                                
+       Total ice area over one hemisphere = (field * cell_area) summed where    
+  lat is                                                                        
+       in that hemisphere. Return a scalar in 10^6 km^2. Used on NATIVE grids,  
+  no                                                                            
+       regrid.                                                                  
+                                                                                
+  4. bias_ensemble(checkpoints, reference_path, months, years, hemisphere,      
+                   ref_var, weights_path=None)                                  
+       Orchestrates the computation. `checkpoints` is a dict {label: path}. For 
+  each                                                                          
+       checkpoint: climatology() it (IFRAC). Climatology() the reference        
+  (ref_var),                                                                    
+       regrid_to_gx1v7 it once, reuse for all. Bias = checkpoint - reference    
+       (POSITIVE = too much ice). Also compute ice_area error per checkpoint on 
+       native grids (checkpoint uses gx1v7 tarea; reference uses its own cell   
+  area).                                                                        
+       Return the per-checkpoint bias fields and area errors in one simple      
+  structure                                                                     
+       (a dict keyed by label is fine).                                         
+                                                                                
+  5. plot_bias_grid(biases, hemisphere, fig_dir=None, months=None, years=None)  
+       Small-multiples grid of the bias map, one panel per checkpoint, ALL      
+  sharing                                                                       
+       one diverging colorbar centered on zero (RdBu_r), polar projection.      
+  Reuse my                                                                      
+       existing polar-axis / draw helpers. Save to fig_dir if given (filename   
+  with                                                                          
+       months+years+hemisphere), else return the figure.                        
+                                                                                
+  6. plot_area_error(area_errors, hemisphere, fig_dir=None, ...)                
+       Dot/bar plot of hemispheric ice-area error per checkpoint, with a zero   
+  line                                                                          
+       = reference. Save or return like above.                                  
+                                                                                
+  Sign convention EVERYWHERE: bias = checkpoint - reference, positive = too     
+  much ice.                                                                     
+                                                                                
+  I'll drive it from a notebook like:                                           
+      biases, areas = bias_ensemble(                                            
+          {"ck33": ".../ck33", "ck36": ".../ck36"},                             
+          reference_path="/glade/derecho/scratch/wchapman/b_credit_runs/b.e21.C 
+  REDIT_climate_branch_1980_1980_zmdata_ERA5scaled_zmdata_Qtot.zarr",           
+          months=[8], years=("1980","1984"), hemisphere="north", ref_var="<from 
+  inspection>",                                                                 
+      )                                                                         
+      plot_bias_grid(biases, "north")                                           
+      plot_area_error(areas, "north")                                           
+                                                                                
+  === A short README ===                                                        
+                                                                                
+  Write README.md in /glade/work/tvoeller/honors_thesis/code/ , under ~1 page:  
+    - one-line purpose,                                                         
+    - the file/function map (each of the 6 functions, one line each),           
+    - the data flow in words: checkpoint + reference -> climatology -> regrid   
+  the                                                                           
+      reference -> bias -> two figures,                                         
+    - one runnable example call,                                                
+    - the key conventions: bias sign, checkpoints are never regridded, area is  
+      computed on native grids.                                                 
+  Keep it plain and short — it's a map for me, not documentation.               
+                                                                                
+  === Inspect and report BEFORE building the ensemble loop ===                  
+                                                                                
+  IFRAC is confirmed as the checkpoint variable — no need to re-verify its      
+  name.                                                                         
+  Still check:                                                                  
+  1. One checkpoint cpl.hi: the time axis type (real datetime vs a year counter 
+  vs                                                                            
+     cftime), and where gx1v7 cell CORNERS/bounds live for the conservative     
+  regrid                                                                        
+     (likely a CICE/POP grid file, not the coupler file).                       
+  2. The reference zarr (xr.open_zarr): the sea-ice concentration variable name 
+  —                                                                             
+     it is a DIFFERENT CESM run so it will NOT necessarily be called IFRAC      
+  (could be                                                                     
+     aice, siconc, ICEFRAC) — plus its units (0-1 vs 0-100), its grid, and      
+  CRITICALLY                                                                    
+     its actual time span. If it does NOT cover the requested year window, or   
+  has no                                                                        
+     sea-ice variable, STOP and tell me — that's a question for my advisor.     
+  3. Prove climatology() on ONE checkpoint for months=[8] returns a non-empty   
+  2D                                                                            
+     field before looping. (If the time axis isn't real datetimes, the          
+  selection will                                                                
+     silently return nothing.)                                                  
+                                                                                
+  === Environment ===                                                           
+  Confirm `import xesmf as xe` works in my env before writing regrid code; if   
+  not,                                                                          
+  tell me before installing (it needs ESMPy — use an NCAR NPL conda env that    
+  has it,                                                                       
+  don't pip-build it). xarray throughout.                                       
+                                                                                
+  Stop after inspection + the one-checkpoint test and show me before building   
+  the loop.                                                                     
+
+  Read 3 files, listed 3 directories, ran 14 shell commands (ctrl+o to expand)
+
+● Inspection report — stopping here as asked
+
+  Environment: xesmf is available, no install needed
+
+  Your current kernel (/glade/u/apps/jupyterhub/jh-23.11) does not have xesmf.
+  These NCAR envs do:
+
+  ┌──────────────────────────────────┬────────┬───────┬──────────┐
+  │               env                │ xesmf  │ esmpy │  xarray  │
+  ├──────────────────────────────────┼────────┼───────┼──────────┤
+  │ /glade/u/apps/opt/conda/envs/npl │ 0.8.10 │ 8.8.1 │ 2025.7.1 │
+  ├──────────────────────────────────┼────────┼───────┼──────────┤
+  │ .../npl-2025b                    │ 0.8.10 │ 8.8.1 │ 2025.7.1 │
+  ├──────────────────────────────────┼────────┼───────┼──────────┤
+  │ .../npl-2025a                    │ 0.8.8  │ 8.7.0 │ 2025.1.1 │
+  └──────────────────────────────────┴────────┴───────┴──────────┘
+
+  Run the notebook on the NPL kernel. Nothing to build.
+
+  1. Checkpoint files
+
+  There is no cpl.hi stream in these cases. The run dirs have pop.h.YYYY-MM.nc
+  (monthly), pop.h.nday1.* (daily), and cice.h.*. IFRAC — the coupler ice
+  fraction received by the ocean — lives in the pop.h monthly stream, gx1v7
+  curvilinear (nlat=384, nlon=320), units fraction. That's what your existing
+  Check_dataset.ipynb was already reading.
+
+  Time axis type: cftime.DatetimeNoLeap, and it is stamped at the END of the 
+  averaging interval — the 1980-01 file carries 1980-02-01. Selecting
+  time.dt.month == 8 on the raw axis silently gives you July. Fix I verified and
+  will use inside climatology(), one line:
+
+  ds = ds.assign_coords(time=ds["time_bound"].mean("d2"))   # 1980-01 file -> 
+  1980-01-16
+
+  Cell corners: not in the file. Only TLAT/TLONG (centres) and ULAT/ULONG, which
+  POP stores as each T cell's northeast corner. Your
+  ice_ens/grids.py:pop_grid() already rebuilds the full (385, 321) corner array
+  from those (handles the mid-row seam and the tripole wrap). I'll call it, not
+  rewrite it. TAREA is in cm² → ×1e-4 for m².
+
+  2. Reference zarr
+
+  ┌───────────────┬─────────────────────────────────────────────────────────┐
+  │               │                                                         │
+  ├───────────────┼─────────────────────────────────────────────────────────┤
+  │ sea-ice       │ ICEFRAC — "Fraction of sfc area covered by sea-ice". No │
+  │ variable      │  aice, no siconc.                                       │
+  ├───────────────┼─────────────────────────────────────────────────────────┤
+  │ units         │ 0–1 (max 0.99999)                                       │
+  ├───────────────┼─────────────────────────────────────────────────────────┤
+  │ grid          │ regular lat/lon 192×288, coords named                   │
+  │               │ latitude/longitude                                      │
+  ├───────────────┼─────────────────────────────────────────────────────────┤
+  │ time          │ 6-hourly, cftime.DatetimeNoLeap, 1460 steps/store       │
+  └───────────────┴─────────────────────────────────────────────────────────┘
+
+  The reference is one zarr per year, not one store.
+  /glade/derecho/scratch/wchapman/b_credit_runs/ holds 35 stores,
+  ..._1980_1980_... through ..._1980_2014_... (the first 1980 is the branch year
+  and never changes). The path in your example covers 1980 only — passing it
+  with years=("1980","1984") gives you a one-year "climatology", not five. So
+  climatology() will accept a glob and concatenate:
+
+  reference_path="/glade/derecho/scratch/wchapman/b_credit_runs/b.e21.CREDIT_cli
+  mate_branch_1980_*_zmdata_ERA5scaled_zmdata_Qtot.zarr"
+  Verified: matches all 35 (correctly skips the stray
+  ..._1999_..._Qtot_IVT.zarr), and Aug 1980–84 selects 620 timesteps across
+  exactly years 1980–1984.
+
+  Reference time span is fine: 1980–2014. It is not the constraint. The
+  checkpoints are:
+
+  ┌──────┬────────┬───────────────────┐
+  │ case │ months │       span        │
+  ├──────┼────────┼───────────────────┤
+  │ ck70 │ 130    │ 1980-01 … 1990-10 │
+  ├──────┼────────┼───────────────────┤
+  │ ck33 │ 125    │ 1980-01 … 1990-05 │
+  ├──────┼────────┼───────────────────┤
+  │ ck36 │ 96     │ 1980-01 … 1987-12 │
+  ├──────┼────────┼───────────────────┤
+  │ ck69 │ 89     │ 1980-01 … 1987-05 │
+  ├──────┼────────┼───────────────────┤
+  │ ck66 │ 72     │ 1980-01 … 1985-12 │
+  ├──────┼────────┼───────────────────┤
+  │ ck64 │ 24     │ 1980-01 … 1981-12 │
+  └──────┴────────┴───────────────────┘
+
+  Two things to flag, not blockers:
+  - The 20-year window is not available. The longest checkpoint is ~10.9 years.
+    1980–1989 is the most you can ask of ck33/ck70; 1980–1985 is the most all
+    six share except ck64.
+  - ck64 has only 2 years. In a 1980–1984 request it would average 2 Augusts
+    against everyone else's 5. bias_ensemble will print the timestep count per
+    checkpoint so this can't happen silently.
+
+  3. climatology() proved on one checkpoint
+
+  climatology(".../g.e21.CAMULATOR_POP_ck33/run", months=[8], 
+  years=("1980","1984")):
+
+  selected timesteps: 5   years: [1980,1981,1982,1983,1984]   months: [8]
+  shape (384, 320)  dims ('nlat','nlon')
+  86096 finite cells   min 0.0   max 0.9997   mean 0.116
+
+  Non-empty, right count, right months, native gx1v7. Same prototype on the
+  reference glob returned (192, 288), range 0–0.9998.
+
+  One decision before I build the loop
+
+  ICEFRAC is CAM's convention: ice area over total cell area, so coastal cells
+  are diluted by their land part. POP's IFRAC is fraction of the ocean part of a
+  cell. Differenced raw, every coastal cell shows a fake negative bias. Your
+  existing regrid.py divides that out with regridded 1 - LANDFRAC (and its
+  docstring warns that OCNFRAC is the wrong denominator).
+
+  I recommend keeping it — four inline lines in bias_ensemble: climatology
+  LANDFRAC from the same stores, push 1-LANDFRAC through the same regridder,
+  divide, clip. No extra function, no extra weights build. Say the word if you'd
+  rather have the raw conservative difference instead.
+
+  Everything else is settled — say go and I'll write ice_ens/ensemble.py with
+  the six functions plus the README.
+
+✻ Crunched for 4m 9s
+
+※ recap: Goal: build a six-function climatological IFRAC bias pipeline in ice_ens. Inspection is done and verified, and I'm waiting on your call about un-diluting the reference ICEFRAC before writing ensemble.py and the README. (disable recaps in /config)
+
+❯ I did some more investegating at the checkpoint files are for the month so    
+  like 1980-01 would be the month of january, up until febuary. You can see     
+  this in the time_bound data varibles, the start and end months. So lets just  
+  start with the checkpoint 33 p =                                              
+  "/glade/derecho/scratch/liyuanpu/g.e21.CAMULATOR_POP_ck33/run" files look     
+  like this "g.e21.CAMULATOR_POP_ck33.pop.h.1983-01.nc" it goes from 1980-01 to 
+  1990-05 ask clairfying questions                                              
+
+● Good — that matches what I found, and it's the important detail: the time
+  stamp on pop.h.1980-01.nc is 1980-02-01 (the end of the bound), while
+  time_bound is [1980-01-01, 1980-02-01]. So the filename is the honest label
+  and the time_bound midpoint (1980-01-16) is what I'll use as the time
+  coordinate inside climatology() — selecting on the raw time would shift every
+  month by one.
+
+  Three things I want settled before I write the module.
+
+● User answered Claude's questions:
+  ⎿  · The reference's only sea-ice variable is CAM's ICEFRAC = ice area / TOTAL
+     cell area, but POP's IFRAC = ice area / OCEAN part of the cell. 
+     Differenced raw, every coastal cell shows a fake negative bias. How should 
+     regrid_to_gx1v7 handle it? → I say for now #2, can you write a simplifed 
+     message that I can make a note of to bring up to my advisor?
+     · You said start with ck33. What do you want me to write right now? → All 6
+     functions, run on ck33 (Recommended)
+     · ck64 only runs 1980-1981 and ck66 only to 1985, so for a 1980-1984 window
+     they'd average fewer years than ck33. What should bias_ensemble do? → lets
+     just start wtih a 5 year, and skip checkpoints without 5 years of data, 
+     but like i said lets stick to ck33 
+
+● Locked in: raw conservative regrid, no un-dilution (I'll write you the advisor
+  note below), all six functions now, driven with ck33, and bias_ensemble skips
+  any checkpoint that doesn't cover the full window.
+
+  Read 2 files, ran 2 shell commands (ctrl+o to expand)
+
+● Now the end-to-end run on ck33:
+
+  Read 3 files, ran 6 shell commands (ctrl+o to expand)
+● Both figures check out. Now the README:
+
+  Read 1 file, listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+● Built and verified end-to-end.
+
+  What's there
+
+  ice_ens/ensemble.py — the six functions, nothing underneath them.
+  ice_ens/__init__.py exports them, so from ice_ens import bias_ensemble, 
+  plot_bias_grid, plot_area_error works. code/README.md written.
+
+  Drawing calls your plot_poles helpers (_setup_polar_ax, _draw, _coords,
+  _projection, DIFF_CMAP) and corners come from grids.pop_grid / f09_grid /
+  cell_area. Nothing duplicated, nothing new split out.
+
+  ck33, August, 1980–1984 mean, Arctic
+
+  reference  ICEFRAC  620 timesteps, 1980-1984 months [8]: north ice area 5.825
+  x10^6 km2
+    ck33: 5 timesteps, north ice area 6.388, error +0.563 x10^6 km2
+    SKIP ck64: only 2 of 5 timesteps in 1980-1984 (has years [1980, 1981])
+
+  The skip rule works as you asked. Bias field is (384, 320), range −0.67 to
+  +0.77, mean +0.018 — ck33 has too much ice overall, concentrated in
+  Greenland/Barents and Hudson/Baffin, with too little in the central Arctic.
+  Figures in output/ensemble/figures/.
+
+  I also ran all six checkpoints once as a layout check (ck33 +0.56, ck36 +0.87,
+  ck66 +0.48, ck69 +0.48, ck70 +1.37, ck64 skipped) — every one is biased high,
+  and they share one colorbar cleanly. Adding them is one dict entry each when
+  you want them.
+
+  Notebook driver:
+
+  from ice_ens import bias_ensemble, plot_bias_grid, plot_area_error
+
+  biases, areas = bias_ensemble(
+      {"ck33": "/glade/derecho/scratch/liyuanpu/g.e21.CAMULATOR_POP_ck33/run"},
+      reference_path="/glade/derecho/scratch/wchapman/b_credit_runs/"
+
+  "b.e21.CREDIT_climate_branch_1980_*_zmdata_ERA5scaled_zmdata_Qtot.zarr",
+      months=[8], years=("1980", "1984"), hemisphere="north", ref_var="ICEFRAC",
+      weights_path="/glade/work/tvoeller/honors_thesis/code/weights/"
+                   "conservative_ref192x288_to_gx1v7_384x320.nc",
+  )
+  plot_bias_grid(biases, "north")
+  plot_area_error(areas, "north", months=[8], years=("1980","1984"))
+
+  Two things to remember: NPL kernel (/glade/u/apps/opt/conda/envs/npl) for
+  xesmf, and the reference path needs the * glob — it's one zarr per year, so a
+  single store gives you a one-year "climatology."
+
+  Note for your advisor
+
+  ▎ The reference run's only sea-ice variable is CAM's ICEFRAC, which is ice 
+  ▎ area over the cell's total area. The checkpoints report POP's IFRAC, which 
+  ▎ is ice area over the cell's ocean area. In a coastal cell that is partly 
+  ▎ land, ICEFRAC is diluted by the land fraction and IFRAC is not, so 
+  ▎ subtracting them directly puts a spurious negative bias along every 
+  ▎ coastline. It's an artifact of the two conventions, not a model error. 
+  ▎ Interior ocean and the central Arctic are unaffected.
+  ▎
+  ▎ We are currently differencing them raw. The fix, if we want it, is to divide
+  ▎ the regridded ICEFRAC by the regridded sea fraction 1 − LANDFRAC (not 
+  ▎ OCNFRAC — in CAM LANDFRAC + OCNFRAC + ICEFRAC = 1, so OCNFRAC is the open 
+  ▎ ocean and goes to zero under the pack).
+  ▎
+  ▎ Question: is the coastal artifact acceptable for a climatological bias map, 
+  ▎ or should the un-dilution be applied?
+
+  Same text is at the bottom of README.md so it doesn't get lost.
+
+  One thing worth raising at the same meeting: the 20-year window isn't 
+  reachable. The longest checkpoint (ck70) is 10 years 10 months. 1980–1989 is
+  the ceiling, and only ck33 and ck70 cover it.
+
+✻ Cogitated for 10m 5s
+
+※ recap: Goal is a climatological IFRAC bias comparison across CAMulator checkpoints; the six-function ice_ens/ensemble.py plus README are written and verified on ck33 for August 1980-1984. Next: decide with your advisor whether to apply the ICEFRAC land-dilution correction. (disable recaps in /config)
+
+❯ /export                                                                       
+  ⎿  Conversation copied to clipboard
+
+❯ /export                                                                       
+  ⎿  Conversation exported to: /glade/work/tvoeller/honors_thesis/code/2026-08-2
+     3-153614-local-command-caveatcaveat-the-messages-below.txt
+
+※ recap: Goal: climatological sea-ice bias of CAMulator checkpoints vs the CESM reference. Six-function ensemble module, README, and verified ck33 August 1980-1984 run are done. Next: decide with your advisor whether to un-dilute ICEFRAC, then add the other checkpoints. (disable recaps in /config)
+
+❯ can you update the ice comparison notebook with a run cycle for these. Also   
+  tell me more about the area_error how is that being calculated. One more      
+  thing how could I confirm the coastline atrifacts by myself.                  
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Three things — and one of them is a correction to what I told you earlier. Let
+  me run the diagnostic first so I'm giving you numbers, not assertions.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The diagnostic came back, and it corrects something I told you: the coastal 
+  artifact runs positive, not negative. CAM's ICEFRAC (ice / total area) is
+  always ≤ POP's IFRAC (ice / ocean area), so the reference reads too low at
+  coasts and checkpoint − reference is pushed up. Measured on ck33, Aug 1980–84,
+  NH:
+
+  ┌────────────────────────┬───────┬───────────┐
+  │ regridded sea fraction │ cells │ mean bias │
+  ├────────────────────────┼───────┼───────────┤
+  │ 0.00–0.50              │ 211   │ +0.139    │
+  ├────────────────────────┼───────┼───────────┤
+  │ 0.50–0.90              │ 2906  │ +0.040    │
+  ├────────────────────────┼───────┼───────────┤
+  │ 0.90–0.99              │ 1683  │ +0.029    │
+  ├────────────────────────┼───────┼───────────┤
+  │ ≈ 1.0 (open ocean)     │ 33620 │ +0.016    │
+  └────────────────────────┴───────┴───────────┘
+
+  Un-diluting collapses the coastal mean from +0.040 to +0.012 and leaves
+  open-ocean cells at +0.016 untouched — that's an artifact signature, not a
+  model error.
+
+  The good news for your other question: the area error is unaffected by any of 
+  this. Both totals are true ice areas on their own native grids (reference
+  native 5.825; regridding it raw loses 0.208 to dilution, un-diluted recovers
+  5.820). So ck33's +0.563 is real.
+
+  Two decisions before I write this up.
+
+● User declined to answer questions
+  ⎿  · Now that we've measured it — coastal cells run +0.040 raw vs +0.012 
+     un-diluted, open ocean unchanged at +0.016 — do you want the un-dilution 
+     available in the code before you talk to your advisor? (Add an 
+     off-by-default switch (Recommended) / Leave the code raw-only / Switch to 
+     un-diluted by default)
+     · What should the new notebook section's checkpoint dict default to? (All 
+     six, ck64 auto-skipped (Recommended) / ck33 only)
+
+✻ Worked for 3m 20s
+
+❯ sorry you did not add anything to the notebook for the climatology runs, I    
+  want to run the runs there to create the outputs. just write ck33 for now and 
+  I will manually change it for each. Some questions: are you repeating the     
+  same 5 years for the refrence files or are you taking a larger climitalogy    
+  for it? 2. Can you reorginize the output folders and the output directorys to 
+  save each climatolgy run to a checkpoint, so all ck33 outputs will go in      
+  ck33, then in ck33 there will be another folder for the esemble run, all it   
+  is is moving the ensemble folder into ck33.                                   
+
+● Answering both before I write the plan:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Q1 — the reference uses the same 5 years, not a longer climatology.
+  bias_ensemble passes your months/years straight through to climatology() for
+  both sides. The printout is the proof: 620 timesteps = 5 Augusts × 31 days × 4
+  samples/day (the reference is 6-hourly). So Aug 1980–84 checkpoint vs Aug
+  1980–84 reference — matched windows. A longer reference baseline (say
+  1980–2014) is possible but would be a different question: "bias against the
+  long-term climate" rather than "bias over this window." I've noted it as a
+  one-line switch in the plan rather than changing it.
+
+  Q2 — no library change needed. Your data.out_dir(case, kind) already builds
+  output/<label>/<kind> and creates it, so data.out_dir('ck33', 'ensemble')
+  gives exactly the layout you want.
+
+● Updated plan
+  ⎿  /plan to preview
+  ⎿  User rejected Claude's plan:
+     ╭─────────────────────────────────────────────────────────────────────────╮
+     │ Climatology run cycle in the notebook + output reorg                    │
+     │                                                                         │
+     │ Context                                                                 │
+     │                                                                         │
+     │ ice_ens/ensemble.py (the six climatology functions) is built and        │
+     │ verified, but                                                           │
+     │ ice_comparison.ipynb still only drives the old single-year comparison — │
+     │ cell 25 is a                                                            │
+     │ stub code cell reading ## Climatology runs and cells 26/27 are empty.   │
+     │ Tate needs to                                                           │
+     │ actually run the climatology cycle from the notebook to produce         │
+     │ outputs, one                                                            │
+     │ checkpoint at a time, changing the case label by hand between runs.     │
+     │                                                                         │
+     │ Two things also came out of the diagnostic run that have to be folded   │
+     │ in:                                                                     │
+     │                                                                         │
+     │ 1. The coastal ICEFRAC/IFRAC artifact runs POSITIVE, not negative. CAM  │
+     │    ICEFRAC = ice / total cell area is always ≤ POP IFRAC = ice / ocean  │
+     │    area,                                                                │
+     │    so the reference reads too low at coasts and checkpoint − reference  │
+     │    is pushed up.                                                        │
+     │    README.md currently says "negative" and must be corrected.           │
+     │ 2. The hemispheric area error is NOT affected by that artifact. Both    │
+     │    totals are                                                           │
+     │    true ice areas on their own native grids, so ck33's +0.563 is real.  │
+     │    This is worth                                                        │
+     │    stating explicitly in the notebook, because it is the obvious next   │
+     │    thing to doubt.                                                      │
+     │                                                                         │
+     │ Measured on ck33, August, 1980–1984, NH — the evidence for both points: │
+     │                                                                         │
+     │ ┌────────────────────────┬───────┬───────────┐                          │
+     │ │ regridded sea fraction │ cells │ mean bias │                          │
+     │ ├────────────────────────┼───────┼───────────┤                          │
+     │ │ 0.00–0.50              │ 211   │ +0.139    │                          │
+     │ ├────────────────────────┼───────┼───────────┤                          │
+     │ │ 0.50–0.90              │ 2906  │ +0.040    │                          │
+     │ ├────────────────────────┼───────┼───────────┤                          │
+     │ │ 0.90–0.99              │ 1683  │ +0.029    │                          │
+     │ ├────────────────────────┼───────┼───────────┤                          │
+     │ │ ≈ 1.0 (open ocean)     │ 33620 │ +0.016    │                          │
+     │ └────────────────────────┴───────┴───────────┘                          │
+     │                                                                         │
+     │ Un-diluting drops the coastal mean from +0.040 to +0.012 and leaves     │
+     │ open-ocean cells                                                        │
+     │ at +0.016 unchanged. Reference NH ice area: 5.825 native, 5.617         │
+     │ regridded raw, 5.820                                                    │
+     │ regridded un-diluted.                                                   │
+     │                                                                         │
+     │ Scope                                                                   │
+     │                                                                         │
+     │ Notebook cells, one README correction, and moving a directory. No       │
+     │ change to                                                               │
+     │ ice_ens/ensemble.py or any other module — data.out_dir() already        │
+     │ produces the                                                            │
+     │ requested folder layout.                                                │
+     │                                                                         │
+     │ ---                                                                     │
+     │                                                                         │
+     │ 1. Output folder reorg                                                  │
+     │                                                                         │
+     │ Target layout — each checkpoint owns everything about itself:           │
+     │                                                                         │
+     │ output/ck33/figures/      # existing, from the old per-year comparison  │
+     │ output/ck33/ensemble/     # NEW: climatology bias grid + area error     │
+     │ output/ck70/figures/                                                    │
+     │                                                                         │
+     │ Two actions:                                                            │
+     │                                                                         │
+     │ - git mv output/ensemble/figures/*.png output/ck33/ensemble/ (those two │
+     │   PNGs are                                                              │
+     │   ck33 runs), then remove the now-empty output/ensemble/. Also drop the │
+     │   stray                                                                 │
+     │   .ipynb_checkpoints/ copies underneath it.                             │
+     │ - In the notebook, get the directory from the existing helper rather    │
+     │   than building a                                                       │
+     │   path by hand:                                                         │
+     │                                                                         │
+     │ FIG_DIR = data.out_dir(CASE, 'ensemble')     # -> output/ck33/ensemble, │
+     │ created                                                                 │
+     │                                                                         │
+     │   data.out_dir is at ice_ens/data.py:73 and already does                │
+     │   makedirs(exist_ok=True).                                              │
+     │                                                                         │
+     │ 2. Notebook — the climatology run cycle                                 │
+     │                                                                         │
+     │ File: ice_comparison.ipynb. Replace the stub cell 25 and consume the    │
+     │ two empty                                                               │
+     │ trailing cells; append the rest. The existing single-year section       │
+     │ (cells 0–24) is left                                                    │
+     │ alone.                                                                  │
+     │                                                                         │
+     │ Cell 25 is currently a code cell whose body is ## Climatology runs — it │
+     │ becomes a                                                               │
+     │ markdown cell. Editing via NotebookEdit.                                │
+     │                                                                         │
+     │ The cells, in order                                                     │
+     │                                                                         │
+     │ (a) markdown — section header. What the section does, the sign          │
+     │ convention                                                              │
+     │ (bias = checkpoint − reference, positive = too much ice), the two       │
+     │ non-obvious input                                                       │
+     │ facts: the reference needs the * glob because it is one zarr per        │
+     │ calendar year, and                                                      │
+     │ the checkpoint's month comes from time_bound, not the file's timestamp. │
+     │                                                                         │
+     │ (b) code — the knobs. One variable to change per run, as requested:     │
+     │                                                                         │
+     │ from ice_ens import data, bias_ensemble, plot_bias_grid,                │
+     │ plot_area_error                                                         │
+     │                                                                         │
+     │ CASE   = 'ck33'          # <- change this per run                       │
+     │ MONTHS = [8]             # [8] = August; [6, 7, 8] = a JJA mean         │
+     │ YEARS  = ('1980', '1984')                                               │
+     │ HEMI   = 'north'                                                        │
+     │                                                                         │
+     │ CHECKPOINTS = {CASE:                                                    │
+     │ f'/glade/derecho/scratch/liyuanpu/g.e21.CAMULATOR_POP_{CASE}/run'}      │
+     │ REFERENCE   = ('/glade/derecho/scratch/wchapman/b_credit_runs/'         │
+     │                'b.e21.CREDIT_climate_branch_1980_*_zmdata_ERA5scaled_zm │
+     │ data_Qtot.zarr')                                                        │
+     │ WEIGHTS =                                                               │
+     │ f'{data.WEIGHT_DIR}/conservative_ref192x288_to_gx1v7_384x320.nc'        │
+     │ FIG_DIR = data.out_dir(CASE, 'ensemble')                                │
+     │                                                                         │
+     │ Checkpoint spans go in a comment so a window that will be skipped is    │
+     │ obvious before                                                          │
+     │ running: ck70→1990-10, ck33→1990-05, ck36→1987-12, ck69→1987-05,        │
+     │ ck66→1985-12,                                                           │
+     │ ck64→1981-12 only.                                                      │
+     │                                                                         │
+     │ (c) code — the run. biases, areas = bias_ensemble(CHECKPOINTS,          │
+     │ REFERENCE, MONTHS, YEARS, HEMI, ref_var='ICEFRAC',                      │
+     │ weights_path=WEIGHTS). Prints per-checkpoint timestep                   │
+     │ counts and areas; ~30 s for one checkpoint with weights already on      │
+     │ disk.                                                                   │
+     │                                                                         │
+     │ (d) code — the bias map. plot_bias_grid(biases, HEMI, fig_dir=FIG_DIR). │
+     │                                                                         │
+     │ (e) code — the area error. plot_area_error(areas, HEMI,                 │
+     │ fig_dir=FIG_DIR, months=MONTHS, years=YEARS).                           │
+     │                                                                         │
+     │ (f) markdown — how the area error is calculated. Answers the question   │
+     │ directly:                                                               │
+     │                                                                         │
+     │ - checkpoint side: sum(IFRAC × TAREA) over cells with TLAT ≥ 0, TAREA   │
+     │   in cm² so                                                             │
+     │   ×1e-4. gx1v7's land mask is binary — an ocean cell is wholly ocean —  │
+     │   so                                                                    │
+     │   IFRAC × TAREA is real ice area.                                       │
+     │ - reference side: sum(ICEFRAC × cell_area) on its own 192×288 grid,     │
+     │   cell areas                                                            │
+     │   from grids.cell_area(grids.f09_grid(...)). ICEFRAC is ice/total, so   │
+     │   × total area is again real ice area.                                  │
+     │ - error = checkpoint − reference, ×1e-12 → 10⁶ km². Positive = too much │
+     │   ice.                                                                  │
+     │ - Neither side is regridded, which is why the number does not inherit   │
+     │   the coastal                                                           │
+     │   dilution artifact or any interpolation error.                         │
+     │ - The reference is averaged over the same MONTHS/YEARS as the           │
+     │   checkpoint —                                                          │
+     │   620 timesteps for Aug 1980–84 is 5 × 31 × 4 (6-hourly). To use a      │
+     │   longer reference                                                      │
+     │   baseline instead, call climatology(REFERENCE, MONTHS,                 │
+     │   ('1980','2014')) separately.                                          │
+     │                                                                         │
+     │ (g) code — reproduce the area error by hand. Calls ice_area() on each   │
+     │ side                                                                    │
+     │ explicitly and asserts it matches areas[CASE], so the paragraph above   │
+     │ is checked                                                              │
+     │ rather than believed.                                                   │
+     │                                                                         │
+     │ (h) markdown — confirming the coastal artifact yourself. The reasoning  │
+     │ (ICEFRAC ≤ IFRAC on any part-land cell ⇒ reference too low ⇒ bias too   │
+     │ positive)                                                               │
+     │ and what the next cell measures.                                        │
+     │                                                                         │
+     │ (i) code — the diagnostic. Verified working; regrid the reference's sea │
+     │ fraction                                                                │
+     │ through the same weights, then bin the bias by it:                      │
+     │                                                                         │
+     │ land  = climatology(REFERENCE, MONTHS, YEARS, var='LANDFRAC')           │
+     │ sea_g = regrid_to_gx1v7(1.0 - land, ck, weights_path=WEIGHTS)           │
+     │ # mean bias in bands of sea_g; then ck - (ref_g / sea_g) for the        │
+     │ un-diluted comparison                                                   │
+     │                                                                         │
+     │ Prints the table above. The tell is that the open-ocean mean is         │
+     │ unchanged by                                                            │
+     │ un-diluting while the coastal mean collapses — a real model error would │
+     │ move both.                                                              │
+     │                                                                         │
+     │ (j) markdown — knobs for this section. MONTHS, YEARS, HEMI='south',     │
+     │ plot_bias_grid(..., vmax=0.5) to pin the colour scale across runs so    │
+     │ separately-run                                                          │
+     │ checkpoints stay comparable, and a note that adding entries to          │
+     │ CHECKPOINTS puts                                                        │
+     │ several checkpoints in one figure.                                      │
+     │                                                                         │
+     │ 3. README correction                                                    │
+     │                                                                         │
+     │ README.md, the "Open question for my advisor" section: change "spurious │
+     │ negative                                                                │
+     │ bias" to positive, explain the direction (ICEFRAC ≤ IFRAC), and paste   │
+     │ in the                                                                  │
+     │ measured sea-fraction table plus the "area error is unaffected"         │
+     │ finding. Also fix the                                                   │
+     │ matching "Things that will bite you" bullet.                            │
+     │                                                                         │
+     │ ---                                                                     │
+     │                                                                         │
+     │ Verification                                                            │
+     │                                                                         │
+     │ 1. jupyter nbconvert --to notebook --execute --inplace                  │
+     │    ice_comparison.ipynb under                                           │
+     │    /glade/u/apps/opt/conda/envs/npl/bin/python (kernel npl-2025b, which │
+     │    has                                                                  │
+     │    xesmf 0.8.10) — or run just the new cells if a full re-execute of    │
+     │    the old section                                                      │
+     │    is unwanted.                                                         │
+     │ 2. Confirm the run prints reference ICEFRAC 620 timesteps ... and       │
+     │    ck33: 5 timesteps, north ice area 6.388, error +0.563.               │
+     │ 3. Confirm two PNGs land in output/ck33/ensemble/:                      │
+     │    bias_grid_m08_1980-1984_north.png,                                   │
+     │    area_error_m08_1980-1984_north.png.                                  │
+     │ 4. Confirm cell (g)'s hand-computed area error equals areas['ck33'].    │
+     │ 5. Confirm cell (i) reproduces the banded table — coastal mean well     │
+     │    above open-ocean                                                     │
+     │    mean, and open-ocean mean unchanged by un-diluting.                  │
+     │ 6. Re-run cell (b) with CASE = 'ck36' to confirm the per-case output    │
+     │    directory is                                                         │
+     │    created and used.                                                    │
+     ╰─────────────────────────────────────────────────────────────────────────╯
+
+● Approved — implementing now, with the advisor note as a "Things to mention 
+  while building" section in the README.
+
+  Listed 1 directory, ran 3 shell commands (ctrl+o to expand)
+
+● Now the notebook cells:
+  Read 1 file, ran 5 shell commands (ctrl+o to expand)
+
+● Done and verified. The whole section runs in 40 s.
+
+  1. Notebook — ice_comparison.ipynb, cells 25–36
+
+  Replaced the ## Climatology runs stub with a working section. ck33 only, one
+  variable to change:
+
+  CASE   = 'ck33'             # <- the checkpoint. Change this and re-run the 
+  section.
+  MONTHS = [8]
+  YEARS  = ('1980', '1984')
+  HEMI   = 'north'
+  CHECKPOINTS = {CASE:
+  f'/glade/derecho/scratch/liyuanpu/g.e21.CAMULATOR_POP_{CASE}/run'}
+  FIG_DIR = data.out_dir(CASE, 'ensemble')
+
+  Cells: knobs → bias_ensemble → bias map → area error → how the area error is 
+  computed + a cell that recomputes it by hand and asserts it matches →
+  confirming the coastal artifact + the diagnostic → knobs for the section. Live
+  output:
+
+  figures -> /glade/work/tvoeller/honors_thesis/code/output/ck33/ensemble
+  reference  ICEFRAC  620 timesteps, 1980-1984 months [8]: north ice area 5.825
+    ck33: 5 timesteps, north ice area 6.388, error +0.563 x10^6 km2
+  matches bias_ensemble: True
+
+  2. Output layout — no library change needed
+
+  Your data.out_dir(case, kind) already did this. output/ensemble/ moved into
+  output/ck33/ensemble/:
+
+  output/ck33/figures/     # the old single-year comparison
+  output/ck33/ensemble/    # bias_grid_m08_1980-1984_north.png,
+  area_error_...png
+  output/ck70/figures/
+
+  3. Reference years — same 5, confirmed
+
+  bias_ensemble passes your MONTHS/YEARS to climatology() for both sides. 620 
+  timesteps = 5 Augusts × 31 days × 4 samples/day. Matched windows, not a longer
+  baseline. The markdown cell notes how to use a long-term reference instead if
+  your advisor wants that comparison.
+
+  4. README — "Things to mention while building"
+
+  Four numbered items:
+
+  1. The coastal artifact, with the corrected sign and the measured table (mean
+     bias +0.139 at sea fraction <0.5 vs +0.016 in open ocean; un-diluting moves
+     coastal +0.040→+0.012 and leaves open ocean at +0.016), plus the
+     1-LANDFRAC vs OCNFRAC warning and the actual question to ask.
+  2. The hemispheric area errors are unaffected — with the 5.825 / 5.617 / 5.820
+     / 6.388 table showing the regrid loses 0.21 and native totals don't, so
+     +0.563 is real. Includes all five checkpoint errors.
+  3. A 20-year window is not reachable — ck70 caps at 10 y 10 m.
+  4. The reference uses the same window, and what the alternative would mean.
+
+  I also fixed the "spurious negative bias" line — it was backwards.
+
+  One thing I noticed but didn't touch: there's an untracked
+  SEAICE_CLIMATOLOGY.ipynb in the repo that isn't mine. If that was your own
+  start on this, the section I added may duplicate it — worth a look before you
+  commit.
+
+✻ Cogitated for 5m 55s
+
+※ recap: Goal is a climatological ice-fraction bias comparison across CAMulator checkpoints; the six-function module, notebook run section, and README are built and verified on ck33. Next: run the notebook section yourself, changing CASE per checkpoint.
+
+❯ how can i plot 3 seperate months, lets say I want jjA but seperate, how can i 
+  do that with the code you wrote.                                              
+
+● Nothing needs to change — plot_bias_grid puts one panel per dict key, and the
+  keys are just labels. So key the dict by month instead of by checkpoint. Let
+  me verify it actually works:
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● Works with zero code changes. Verified output above.
+
+  from ice_ens.plot_poles import MONTH_NAMES
+
+  SEASON = [6, 7, 8]        # <- each month gets its own panel
+
+  biases_by_month, areas_by_month = {}, {}
+  for m in SEASON:
+      b, a = bias_ensemble(CHECKPOINTS, reference_path=REFERENCE, months=[m],
+                           years=YEARS, hemisphere=HEMI, ref_var=REF_VAR,
+                           weights_path=WEIGHTS)
+      label = MONTH_NAMES[m - 1]          # 'June', 'July', 'August'
+      biases_by_month[label] = b[CASE]
+      areas_by_month[label]  = a[CASE]
+
+  plot_bias_grid(biases_by_month, HEMI, fig_dir=FIG_DIR, months=SEASON,
+  years=YEARS)
+  plot_area_error(areas_by_month, HEMI, fig_dir=FIG_DIR, months=SEASON,
+  years=YEARS)
+
+  The trick: months=[6,7,8] in one call gives a JJA mean — one field. Three
+  calls with months=[m] give three fields. plot_bias_grid draws one panel per
+  dict key and doesn't care whether the keys are checkpoints or months, so it
+  lays them out with one shared colorbar either way. plot_area_error likewise
+  gives you three dots — a seasonal view of the area error.
+
+  Ran on ck33, 1980–1984, Arctic (~54 s):
+
+  ┌──────────────────────┬────────┬────────┬────────┐
+  │                      │  June  │  July  │ August │
+  ├──────────────────────┼────────┼────────┼────────┤
+  │ area error (10⁶ km²) │ +0.629 │ +0.459 │ +0.563 │
+  └──────────────────────┴────────┴────────┴────────┘
+
+  The maps show the story the JJA mean would have hidden: the central-Arctic 
+  deficit grows through the summer — barely there in June, strong by July and
+  August — while the Barents/Greenland excess sits there all season. Those
+  partly cancel in June, which is why the area error is largest in June despite
+  the map looking mildest.
+
+  One caveat before you use this in the thesis
+
+  The suptitle comes out as "months 06-07-08, 1980–1984 mean", which reads like
+  a JJA mean — the opposite of what the figure shows. Two ways out:
+
+  No code change — skip fig_dir, retitle, save yourself:
+
+  fig = plot_bias_grid(biases_by_month, HEMI, months=SEASON, years=YEARS)
+  fig.suptitle(f'Arctic sea-ice fraction bias — {CASE}, 1980–1984 mean of each
+  month\n'
+               'positive = too much ice', y=1.02, fontsize=15)
+  fig.savefig(f'{FIG_DIR}/bias_grid_JJA-separate_1980-1984_north.png',
+              dpi=140, bbox_inches='tight')
+
+  This also dodges the filename collision — as written above, the per-month
+  figure overwrites a true JJA-mean figure, since both resolve to
+  bias_grid_m06-07-08_1980-1984_north.png.
+
+  Or I add a title= keyword to plot_bias_grid (and plot_area_error) that
+  overrides the auto-title and feeds the filename. Two lines each, no new
+  functions. Say the word and I'll add it plus a notebook cell for this whole
+  pattern.
+
+  One more thing it gives you free: key by f'{case} {MONTH_NAMES[m-1]}' and loop
+  over cases and months to get every checkpoint × month in one figure on one
+  colorbar.
+
+✻ Baked for 2m 9s
+
+※ recap: You're building climatological sea-ice bias tools for your thesis; the six functions, notebook section, and README are done and verified on ck33. Next: tell me whether to add a `title=` option to the plot functions for per-month figures, or leave it.
+
+❯ yes add that                                                                  
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now the notebook cells:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● The knobs cell now reads MONTHS = [6], YEARS = ('1980','1989') — you edited it
+  while I was working, and the insert preserved your values. The run used them.
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● Added and verified end-to-end (the full section runs in ~92 s).
+
+  title= and name= on both plot functions
+
+  plot_bias_grid(biases, hemisphere, fig_dir=None, months=None, years=None,
+                 title=None, name=None, vmax=None, edge=60, dpi=140)
+  plot_area_error(area_errors, hemisphere, fig_dir=None, months=None,
+  years=None,
+                  title=None, name=None, dpi=140)
+
+  title replaces the caption verbatim; name replaces the m<months>_<window> part
+  of the filename, so the file becomes bias_grid_<name>_<hemisphere>.png. Both
+  default to None and change nothing when omitted — your existing calls are
+  unaffected. One shared _save handles it, no new functions.
+
+  Notebook — new subsection before "Turning the knobs"
+
+  Markdown explaining the pattern, then two cells: the per-month loop, and the
+  plotting with title/name. Files written:
+
+  output/ck33/ensemble/bias_grid_ck33_Jun-Jul-Aug_separate_1980-1989_north.png
+  output/ck33/ensemble/area_error_ck33_Jun-Jul-Aug_separate_1980-1989_north.png
+
+  README updated too — the function table rows and the note under the example.
+
+  Something you should look at
+
+  Your window is now 1980–1989, and that changes the picture substantially:
+
+  ┌───────────┬───────┬───────┬────────┐
+  │           │ June  │ July  │ August │
+  ├───────────┼───────┼───────┼────────┤
+  │ 1980–1984 │ +0.63 │ +0.46 │ +0.56  │
+  ├───────────┼───────┼───────┼────────┤
+  │ 1980–1989 │ +0.95 │ +1.11 │ +1.50  │
+  └───────────┴───────┴───────┴────────┘
+
+  The 10-year means aren't just larger — they grow monotonically through the
+  summer, which the 5-year means didn't. Averaging over twice the span can't do
+  that on its own, so the second five years must be considerably worse than the
+  first: ck33 looks like it's drifting. If so, "the climatology" depends heavily
+  on which window you pick, and that's worth knowing before you present either
+  number. Easiest check is to run YEARS = ('1985','1989') and compare against
+  ('1980','1984') — one knob, two runs.
+
+  The coastal artifact also grows at this window (+0.067 coastal vs +0.016 open
+  ocean, versus +0.040/+0.016 before), so the numbers in the README's "Things to
+  mention while building" are from the 5-year window — worth re-running that
+  cell and updating them if you present the 10-year version.
+
+  One practical note: I rewrote ice_comparison.ipynb on disk. If you have it
+  open in Jupyter, reload from disk before editing or you'll clobber the new
+  cells.
+
+✻ Sautéed for 3m 39s
+
+※ recap: Goal is a climatological IFRAC bias comparison across CAMulator checkpoints; the six-function module, notebook section, and per-month plotting are all built and verified. Next: run YEARS 1985-1989 versus 1980-1984 to check whether ck33 is drifting.
+
+❯ NameError                                 Traceback (most recent call last)   
+  Cell In[16], line 6                                                           
+        2 season = '-'.join(MONTH_NAMES[m - 1][:3] for m in SEASON)      #      
+  'Jun-Jul-Aug'                                                                 
+        3 stem   = f'{CASE}_{season}_separate_{YEARS[0]}-{YEARS[1]}'            
+        5 fig = plot_bias_grid(                                                 
+  ----> 6     biases_by_month, HEMI, fig_dir=FIG_DIR, name=bias_grid_JJA,       
+        7     title=f'{pole} sea-ice fraction bias — {CASE},                    
+  {YEARS[0]}–{YEARS[1]} mean of '                                               
+        8           f'each month\npositive = too much ice',                     
+        9 )                                                                     
+       10 plt.show()                                                            
+       12 fig = plot_area_error(                                                
+       13     areas_by_month, HEMI, fig_dir=FIG_DIR, name=area_bias_JJA,        
+       14     title=f'{pole} sea-ice area error — {CASE}, {YEARS[0]}–{YEARS[1]} 
+  mean of '                                                                     
+       15           f'each month\npositive = too much ice',                     
+       16 )                                                                     
+                                                                                
+  NameError: name 'bias_grid_JJA' is not defined ** im getting this error       
+
+● Missing quotes — bias_grid_JJA is being read as a variable name. It needs to
+  be a string.
+
+  But also worth knowing: name is only the middle of the filename. _save builds
+  {kind}_{name}_{hemisphere}.png, so the bias_grid_ / area_error_ prefix and the
+  _north suffix are added for you. name='bias_grid_JJA' would give you
+  bias_grid_bias_grid_JJA_north.png.
+
+  So use the same short name for both calls:
+
+  pole = 'Arctic' if HEMI == 'north' else 'Antarctic'
+
+  fig = plot_bias_grid(
+      biases_by_month, HEMI, fig_dir=FIG_DIR, name='JJA',
+      title=f'{pole} sea-ice fraction bias — {CASE}, {YEARS[0]}–{YEARS[1]} mean
+  of '
+            f'each month\npositive = too much ice',
+  )
+  plt.show()
+
+  fig = plot_area_error(
+      areas_by_month, HEMI, fig_dir=FIG_DIR, name='JJA',
+      title=f'{pole} sea-ice area error — {CASE}, {YEARS[0]}–{YEARS[1]} mean of
+  '
+            f'each month\npositive = too much ice',
+  )
+  plt.show()
+
+  That writes:
+
+  output/ck33/ensemble/bias_grid_JJA_north.png
+  output/ck33/ensemble/area_error_JJA_north.png
+
+  You can drop the season/stem lines if you're hardcoding 'JJA'. One thing to
+  watch: a bare 'JJA' doesn't record the case or the window, so a ck33 1980–1989
+  run and a ck70 1980–1984 run both land on the same two files and overwrite
+  each other. If you're going to run several,
+  name=f'JJA_{CASE}_{YEARS[0]}-{YEARS[1]}' keeps them separate — that's all stem
+  was doing.
+
+  I left the notebook alone since you have it open — paste over the cell rather
+  than reloading from disk.
+
+✻ Worked for 18s
+
+❯ TypeError                                 Traceback (most recent call last)   
+  Cell In[19], line 5                                                           
+        2 season = '-'.join(MONTH_NAMES[m - 1][:3] for m in SEASON)      #      
+  'Jun-Jul-Aug'                                                                 
+        3 stem   = f'{CASE}_{season}_separate_{YEARS[0]}-{YEARS[1]}'            
+  ----> 5 fig = plot_bias_grid(                                                 
+        6     biases_by_month, HEMI, fig_dir=FIG_DIR, name=stem,                
+        7     title=f'{pole} sea-ice fraction bias — {CASE},                    
+  {YEARS[0]}–{YEARS[1]} mean of '                                               
+        8           f'each month\npositive = too much ice',                     
+        9 )                                                                     
+       10 plt.show()                                                            
+       12 fig = plot_area_error(                                                
+       13     areas_by_month, HEMI, fig_dir=FIG_DIR, name=stem,                 
+       14     title=f'{pole} sea-ice area error — {CASE}, {YEARS[0]}–{YEARS[1]} 
+  mean of '                                                                     
+       15           f'each month\npositive = too much ice',                     
+       16 )                                                                     
+                                                                                
+  TypeError: plot_bias_grid() got an unexpected keyword argument 'name'         
+
+  Searched for 1 pattern, listed 1 directory (ctrl+o to expand)
+
+● The file on disk is correct — this is a stale kernel, not a code problem. Let
+  me confirm a fresh interpreter sees the new signature:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Restart the kernel. Kernel → Restart Kernel, then re-run the climatology
+  section. The file on disk has name= (just confirmed above); your running
+  kernel is holding the function objects from before I added it.
+
+  %autoreload 2 didn't catch it because cell 26 does from ice_ens import 
+  plot_bias_grid, which binds the function object straight into the notebook
+  namespace, and ice_ens/__init__.py re-exports it from ice_ens.ensemble.
+  autoreload updates the copy inside the module but your notebook's name still
+  points at the old object — and a newly added parameter is exactly the change
+  it misses most often. Editing a function body would have reloaded fine, which
+  is why this hasn't bitten you until now.
+
+  After the restart, name='JJA' (or name=stem) will work as written.
+● User answered Claude's questions:
+  ⎿  · Restarting fixes it now. Do you want the notebook changed so a future 
+     signature change doesn't do this again? → Leave it — I'll just restart
+
+● No change then — restart and you're set.
+
+● Updated plan
+  ⎿  /plan to preview
+  ⎿  User rejected Claude's plan:
+     ╭─────────────────────────────────────────────────────────────────────────╮
+     │ No code changes required — stale Jupyter kernel                         │
+     │                                                                         │
+     │ Context                                                                 │
+     │                                                                         │
+     │ plot_bias_grid(..., name=stem) raised                                   │
+     │ TypeError: plot_bias_grid() got an unexpected keyword argument 'name'.  │
+     │                                                                         │
+     │ This is not a code defect. ice_ens/ensemble.py on disk already has the  │
+     │ parameter —                                                             │
+     │ verified two ways:                                                      │
+     │                                                                         │
+     │ ice_ens/ensemble.py:301  def plot_bias_grid(biases, hemisphere,         │
+     │ fig_dir=None, months=None,                                              │
+     │                                             years=None, title=None,     │
+     │ name=None, vmax=None, ...)                                              │
+     │ ice_ens/ensemble.py:384  def plot_area_error(area_errors, hemisphere,   │
+     │ fig_dir=None, months=None,                                              │
+     │                                              years=None, title=None,    │
+     │ name=None, dpi=140)                                                     │
+     │                                                                         │
+     │ and a fresh interpreter reports both signatures correctly. There is     │
+     │ only one                                                                │
+     │ ice_ens/ensemble.py on the path, and its .pyc is newer than the source, │
+     │ so the                                                                  │
+     │ module is current.                                                      │
+     │                                                                         │
+     │ The running kernel is holding the pre-change function objects.          │
+     │ %autoreload 2 did not                                                   │
+     │ catch it because the notebook does from ice_ens import plot_bias_grid — │
+     │ the name is                                                             │
+     │ bound to the function object itself, and ice_ens/__init__.py re-exports │
+     │ it from                                                                 │
+     │ ice_ens.ensemble. autoreload updates the module's copy but not the      │
+     │ notebook's                                                              │
+     │ binding, and a newly added parameter is the change it misses most       │
+     │ often. Editing a                                                        │
+     │ function body would have reloaded fine, which is why this had not come  │
+     │ up before.                                                              │
+     │                                                                         │
+     │ Resolution                                                              │
+     │                                                                         │
+     │ Kernel → Restart Kernel, then re-run the climatology section.           │
+     │ name='JJA' and                                                          │
+     │ name=stem both work as written afterwards.                              │
+     │                                                                         │
+     │ Asked whether to make the notebook immune to this in future (an         │
+     │ explicit reload block,                                                  │
+     │ or calling through the module as ensemble.plot_bias_grid(...)).         │
+     │ Decision: leave it                                                      │
+     │ as is — restarting is quick, the section re-runs in ~90 s, and the six  │
+     │ function                                                                │
+     │ signatures are settled now.                                             │
+     │                                                                         │
+     │ Nothing to implement                                                    │
+     │                                                                         │
+     │ No files to modify. The plan from the previous session — the notebook   │
+     │ climatology                                                             │
+     │ section, the output/<case>/ensemble/ layout, the README "Things to      │
+     │ mention while                                                           │
+     │ building" notes, and the title= / name= keywords — is complete and      │
+     │ verified.                                                               │
+     │                                                                         │
+     │ Verification (after the kernel restart)                                 │
+     │                                                                         │
+     │ 1. Re-run the climatology section top to bottom.                        │
+     │ 2. Confirm the per-month cell writes                                    │
+     │    output/ck33/ensemble/bias_grid_<name>_north.png and                  │
+     │    area_error_<name>_north.png.                                         │
+     │ 3. Confirm the caption reads "mean of each month", not "months 06-07-08 │
+     │    … mean".                                                             │
+     ╰─────────────────────────────────────────────────────────────────────────╯
+
+● Sounds good — restarting the kernel was the whole fix, so there's nothing left
+  on my end.
+
+  Where things stand:
+
+  - ice_ens/ensemble.py — six functions, plus title= / name= on both plot
+    functions
+  - ice_comparison.ipynb — climatology section with the run cycle, the
+    area-error explainer and hand-check, the coastal-artifact diagnostic, and
+    the per-month subsection
+  - README.md — file map, data flow, conventions, and the Things to mention 
+    while building notes for your advisor
+  - Output going to output/<case>/ensemble/
+
+  The one thing still worth a look when you get a chance is the drift signal —
+  ck33's August area error was +0.56 over 1980–1984 but +1.50 over 1980–1989,
+  which suggests the second half of the run is considerably worse. Running YEARS
+  = ('1985','1989') against ('1980','1984') would confirm it, and it'd change
+  how you present any single "climatological" number.
+
+✻ Cogitated for 2m 1s
